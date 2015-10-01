@@ -8,5 +8,11 @@ It works with BMP file format limited to:
 * Compression: none
 
 ## Usage
-Linux: ./bmp2csv in.bmp > out.csv
-Windows: bmp2csv in.bmp > out.csv
+Linux:
+```shell
+./bmp2csv in.bmp > out.csv
+```
+Windows:
+```shell
+bmp2csv in.bmp > out.csv
+```
