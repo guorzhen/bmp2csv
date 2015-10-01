@@ -3,15 +3,15 @@
 #include <string.h>
 #include <inttypes.h>
 
-struct __attribute__((packed)) file_hdr {
+typedef struct __attribute__((packed)) {
     char magic[2];
     int32_t size;
     int16_t rsvd1;
     int16_t rsvd2;
     int32_t offset;
-};
+} file_hdr;
 
-struct __attribute__((packed)) info_hdr_v1 {
+typedef struct __attribute__((packed)) {
     int32_t size;
     int32_t width;
     int32_t height;
@@ -23,20 +23,50 @@ struct __attribute__((packed)) info_hdr_v1 {
     int32_t yres;
     int32_t palette;
     int32_t color;
-};
+} info_hdr_v1;
+
+typedef struct __attribute__((packed)) {
+    uint16_t blue  : 4,
+             green : 4,
+             red   : 4,
+             alpha : 4;
+} pixel_u16;
     
-struct __attribute__((packed)) pixel_rgb {
+typedef struct __attribute__((packed)) {
     uint8_t blue;
     uint8_t green;
     uint8_t red;
-};
+} pixel_u24;
     
-struct __attribute__((packed)) pixel_rgba {
+typedef struct __attribute__((packed)) {
     uint8_t blue;
     uint8_t green;
     uint8_t red;
     uint8_t alpha;
-};
+} pixel_u32;
+
+#define RGB(px)  px->blue,px->green,px->red
+#define RGBA(px) px->blue,px->green,px->red,px->alpha
+#define RGB_FMT  "%02X%02X%02X00,"
+#define RGB_END  "%02X%02X%02X00\n"
+#define RGBA_FMT "%02X%02X%02X%02X,"
+#define RGBA_END "%02X%02X%02X%02X\n"
+
+#define PIXEL_TABLE_COLOR(type, color) do { \
+    uint32_t i; \
+    uint32_t j; \
+    pixel_##type *pixel; \
+    uint32_t *row = (uint32_t *)((char *)data + offset); \
+    for (i = 0; i < ihdr->height; i++) { \
+        pixel = (pixel_##type *)row; \
+        for (j = 0; j + 1 < ihdr->width; j++) { \
+            fprintf(stdout, color##_FMT, color(pixel)); \
+            pixel++; \
+        } \
+        fprintf(stdout, color##_END, color(pixel)); \
+        row += (ihdr->width * ihdr->depth / 32) + pad; \
+    } \
+} while (0)
 
 uint32_t palette_index(int16_t depth, uint32_t *block, uint32_t i)
 {
@@ -53,66 +83,38 @@ uint32_t palette_index(int16_t depth, uint32_t *block, uint32_t i)
     return (index & (((1 << depth) - 1) << offset)) >> offset;
 }
 
-void pixel_table_row(struct info_hdr_v1 *ihdr, uint32_t *block)
+void pixel_table_row(info_hdr_v1 *ihdr, pixel_u32 *palette, uint32_t *block)
 {
     uint32_t i;
     uint32_t count;
-    struct pixel_rgba *palette;
-    struct pixel_rgba *rgba;
+    pixel_u32 *pixel;
     
     count = 0;
-    palette = (struct pixel_rgba *)((char *)ihdr + sizeof(struct info_hdr_v1));
     
     do {
         for (i = 32 / ihdr->depth; i > 0; i--) {
-            rgba = palette + palette_index(ihdr->depth, block, i);
+            pixel = palette + palette_index(ihdr->depth, block, i);
             if (++count == ihdr->width)
                 break;
-            fprintf(stdout, "%02X%02X%02X%02X,", rgba->blue,
-                                                 rgba->green,
-                                                 rgba->red,
-                                                 rgba->alpha);
+            fprintf(stdout, RGBA_FMT, RGBA(pixel));
         }
         block++;
     } while (count != ihdr->width);
     
-    fprintf(stdout, "%02X%02X%02X%02X\n", rgba->blue,
-                                          rgba->green,
-                                          rgba->red,
-                                          rgba->alpha);
+    fprintf(stdout, RGBA_END, RGBA(pixel));
     
     return;
 }
 
-void pixel_table_index(struct info_hdr_v1 *ihdr, uint32_t *row, int32_t pad)
+void pixel_table_index(info_hdr_v1 *ihdr, uint32_t *row, int32_t pad)
 {
     uint32_t i;
+    pixel_u32 *palette;
+    
+    palette = (pixel_u32 *)((char *)ihdr + sizeof(info_hdr_v1));
     
     for (i = 0; i < ihdr->height; i++) {
-        pixel_table_row(ihdr, row);
-        row += (ihdr->width * ihdr->depth / 32) + pad;
-    }
-    
-    return;
-}
-
-void pixel_table_rgb(struct info_hdr_v1 *ihdr, uint32_t *row, int32_t pad)
-{
-    int32_t i;
-    int32_t j;
-    struct pixel_rgb *rgb;
-    
-    for (i = 0; i < ihdr->height; i++) {
-        rgb = (struct pixel_rgb *)row;
-        for (j = 0; j + 1 < ihdr->width; j++) {
-            fprintf(stdout, "%02X%02X%02X,", rgb->blue,
-                                             rgb->green,
-                                             rgb->red);
-            rgb++;
-        }
-        fprintf(stdout, "%02X%02X%02X\n", rgb->blue,
-                                          rgb->green,
-                                          rgb->red);
+        pixel_table_row(ihdr, palette, row);
         row += (ihdr->width * ihdr->depth / 32) + pad;
     }
     
@@ -122,11 +124,11 @@ void pixel_table_rgb(struct info_hdr_v1 *ihdr, uint32_t *row, int32_t pad)
 void bmp_info_hdr_v1(void *data, int32_t offset)
 {
     int32_t pad;
-    struct info_hdr_v1 *ihdr;
+    info_hdr_v1 *ihdr;
     
-    ihdr = (struct info_hdr_v1 *)((char *)data + sizeof(struct file_hdr));
+    ihdr = (info_hdr_v1 *)((char *)data + sizeof(file_hdr));
     if (0 == ihdr->width * ihdr->height) {
-        fprintf(stderr, "Invalid dimension: %d x %d.\n", ihdr->width, ihdr->depth);
+        fprintf(stderr, "Invalid dimensions: %d x %d.\n", ihdr->width, ihdr->depth);
         return;
     }
     
@@ -136,16 +138,20 @@ void bmp_info_hdr_v1(void *data, int32_t offset)
         case  1:
         case  2:
         case  4:
-        case  8:
-        case 16:
-        case 32: pixel_table_index(ihdr, (uint32_t *)((char *)data + offset), pad);
+        case  8: pixel_table_index(ihdr, (uint32_t *)((char *)data + offset), pad);
                  break;
-        case 24: pixel_table_rgb(ihdr, (uint32_t *)((char *)data + offset), pad);
+        case 16: PIXEL_TABLE_COLOR(u16, RGBA);
+                 break;
+        case 24: PIXEL_TABLE_COLOR(u24, RGB);
+                 break;
+        case 32: PIXEL_TABLE_COLOR(u32, RGBA);
                  break;
         default:
                  fprintf(stderr, "Color depth %d not supported yet.\n", ihdr->depth);
                  break;
     }
+    
+    return;
 }
 
 int main(int argc, char *argv[])
@@ -155,7 +161,7 @@ int main(int argc, char *argv[])
     void *data;
     int32_t size;
 
-    struct file_hdr *fhdr;
+    file_hdr *fhdr;
 
     if (2 != argc) {
         fprintf(stderr, "Usage: ./bmp2csv file.bmp > file.csv\n");
@@ -187,7 +193,7 @@ int main(int argc, char *argv[])
         return 4;
     }
 
-    fhdr = (struct file_hdr *)data;
+    fhdr = (file_hdr *)data;
     if (0 != strncmp(fhdr->magic, "BM", 2) || size != fhdr->size) {
         fprintf(stderr, "Invalid BMP file.\n");
         free(data);
@@ -195,8 +201,8 @@ int main(int argc, char *argv[])
         return 5;
     }
 
-    switch (*((int32_t *)((char *)data + sizeof(struct file_hdr)))) {
-        case 40:
+    switch (*((int32_t *)((char *)data + sizeof(file_hdr)))) {
+        case sizeof(info_hdr_v1):
             bmp_info_hdr_v1(data, fhdr->offset);
             break;
         default:
