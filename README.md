@@ -8,14 +8,6 @@ It works with BMP file format limited to:
 * Compression: none
 
 ## Usage
-mode:
-
-      0 - RGBA (default, optional)
-
-      1 - BT.601 / SDTV
-
-      2 - BT.709 / HDTV
-
 Linux:
 ```shell
 ./bmp2csv in.bmp [mode] > out.csv
@@ -24,3 +16,10 @@ Windows:
 ```shell
 bmp2csv in.bmp [mode] > out.csv
 ```
+possible value for mode (optional):
+
+      0 - RGBA (default)
+
+      1 - BT.601 / SDTV
+
+      2 - BT.709 / HDTV
