@@ -8,11 +8,13 @@ It works with BMP file format limited to:
 * Compression: none
 
 ## Usage
-mode: 0 - RGBA(default)
+mode:
 
-      1 - BT.601/SDTV
+      0 - RGBA (default, optional)
 
-      2 - BT.709/HDTV
+      1 - BT.601 / SDTV
+
+      2 - BT.709 / HDTV
 
 Linux:
 ```shell
