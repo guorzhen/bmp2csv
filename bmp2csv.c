@@ -45,26 +45,55 @@ typedef struct __attribute__((packed)) {
     uint8_t alpha;
 } pixel_u32;
 
-#define RGB(px)  px->blue,px->green,px->red
-#define RGBA(px) px->blue,px->green,px->red,px->alpha
-#define RGB_FMT  "%02X%02X%02X00,"
-#define RGB_END  "%02X%02X%02X00\n"
+typedef enum {
+    MODE_RGBA,
+    MODE_BT601,
+    MODE_BT709,
+    MODE_BOUND
+} PRINTPX_MODE;
+
+PRINTPX_MODE g_mode;
+
+#define RGB(px) px->red,px->green,px->blue
+#define RGB_FMT "%02X%02X%02X00,"
+#define RGB_END "%02X%02X%02X00\n"
+
+#define RGBA(px) px->red,px->green,px->blue,px->alpha
 #define RGBA_FMT "%02X%02X%02X%02X,"
 #define RGBA_END "%02X%02X%02X%02X\n"
+
+#define BT601(px) (uint8_t)(px->red*0.299 + px->green*0.587 + px->blue*0.114)
+#define BT601_FMT "%02X,"
+#define BT601_END "%02X\n"
+
+#define BT709(px) (uint8_t)(px->red*0.2126 + px->green*0.7152 + px->blue*0.0722)
+#define BT709_FMT BT601_FMT
+#define BT709_END BT601_END
+
+#define PRINTPX(color, format, px) do { \
+    switch (g_mode) { \
+        case MODE_RGBA:  fprintf(stdout, color##_##format, color(px)); \
+                         break; \
+        case MODE_BT601: fprintf(stdout, BT601_##format, BT601(px)); \
+                         break; \
+        case MODE_BT709: fprintf(stdout, BT709_##format, BT709(px)); \
+                         break; \
+        default:         break; \
+    } \
+} while (0)
 
 #define PIXEL_TABLE_COLOR(type, color) do { \
     uint32_t i; \
     uint32_t j; \
     pixel_##type *pixel; \
-    uint32_t *row = (uint32_t *)((char *)data + offset); \
     for (i = 0; i < ihdr->height; i++) { \
         pixel = (pixel_##type *)row; \
         for (j = 0; j + 1 < ihdr->width; j++) { \
-            fprintf(stdout, color##_FMT, color(pixel)); \
+            PRINTPX(color, FMT, pixel); \
             pixel++; \
         } \
-        fprintf(stdout, color##_END, color(pixel)); \
-        row += (ihdr->width * ihdr->depth / 32) + pad; \
+        PRINTPX(color, END, pixel); \
+        row -= width; \
     } \
 } while (0)
 
@@ -96,17 +125,17 @@ void pixel_table_row(info_hdr_v1 *ihdr, pixel_u32 *palette, uint32_t *block)
             pixel = palette + palette_index(ihdr->depth, block, i);
             if (++count == ihdr->width)
                 break;
-            fprintf(stdout, RGBA_FMT, RGBA(pixel));
+            PRINTPX(RGBA, FMT, pixel);
         }
         block++;
     } while (count != ihdr->width);
     
-    fprintf(stdout, RGBA_END, RGBA(pixel));
+    PRINTPX(RGBA, END, pixel);
     
     return;
 }
 
-void pixel_table_index(info_hdr_v1 *ihdr, uint32_t *row, int32_t pad)
+void pixel_table_index(info_hdr_v1 *ihdr, uint32_t *row, int32_t width)
 {
     uint32_t i;
     pixel_u32 *palette;
@@ -115,7 +144,7 @@ void pixel_table_index(info_hdr_v1 *ihdr, uint32_t *row, int32_t pad)
     
     for (i = 0; i < ihdr->height; i++) {
         pixel_table_row(ihdr, palette, row);
-        row += (ihdr->width * ihdr->depth / 32) + pad;
+        row -= width;
     }
     
     return;
@@ -124,6 +153,8 @@ void pixel_table_index(info_hdr_v1 *ihdr, uint32_t *row, int32_t pad)
 void bmp_info_hdr_v1(void *data, int32_t offset)
 {
     int32_t pad;
+    int32_t width;
+    uint32_t *row;
     info_hdr_v1 *ihdr;
     
     ihdr = (info_hdr_v1 *)((char *)data + sizeof(file_hdr));
@@ -133,12 +164,15 @@ void bmp_info_hdr_v1(void *data, int32_t offset)
     }
     
     pad = ((ihdr->width * ihdr->depth) % 32) ? 1 : 0;
+    width = (ihdr->width * ihdr->depth / 32) + pad;
+    /* pixel table starts from left to right, row by row, bottom to top */
+    row = (uint32_t *)((char *)data + offset) + (ihdr->height - 1) * width;
     
     switch (ihdr->depth) {
         case  1:
         case  2:
         case  4:
-        case  8: pixel_table_index(ihdr, (uint32_t *)((char *)data + offset), pad);
+        case  8: pixel_table_index(ihdr, row, width);
                  break;
         case 16: PIXEL_TABLE_COLOR(u16, RGBA);
                  break;
@@ -154,6 +188,15 @@ void bmp_info_hdr_v1(void *data, int32_t offset)
     return;
 }
 
+void usage(void)
+{
+    fprintf(stderr, "Usage: ./bmp2csv in.bmp [mode] > out.csv\n\n");
+    fprintf(stderr, "mode: %u - RGBA(default)\n", MODE_RGBA);
+    fprintf(stderr, "      %u - BT.601/SDTV\n", MODE_BT601);
+    fprintf(stderr, "      %u - BT.709/HDTV\n", MODE_BT709);
+    return;
+}
+
 int main(int argc, char *argv[])
 {
     char *path;
@@ -163,10 +206,16 @@ int main(int argc, char *argv[])
 
     file_hdr *fhdr;
 
-    if (2 != argc) {
-        fprintf(stderr, "Usage: ./bmp2csv file.bmp > file.csv\n");
-        return 1;
+    switch (argc) {
+        case 2:  g_mode = MODE_RGBA;
+                 break;
+        case 3:  sscanf(argv[2], "%u", &g_mode);
+                 if (MODE_BOUND > g_mode)
+                     break;
+        default: usage();
+                 return 1;
     }
+    
     path = argv[1];
     
     file = fopen(path, "rb");
